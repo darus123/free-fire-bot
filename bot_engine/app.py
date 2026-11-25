@@ -3378,4 +3378,111 @@ async def account_loop_guest(uid, password, region_override=None, clan_override=
                 await asyncio.sleep(15.0)
                 
     except Exception as e:
-        print_error(f"[ACCOUNT LOOP] Bot {uid} fatal: {e}")
+        print_error(f"[ACCOUNT LOOP] Bot {uid} fatal: {e}") 
+async def _team_coordinator():
+        try:
+            # ড্যাশবোর্ডে বা অনলাইনে থাকা সকল বটকে একসাথে কানেক্ট হওয়ার সুযোগ দেওয়া
+            while True:
+                async with _team_state["lock"]:
+                    n = len(_team_state["peers"])
+                if n >= 1: break
+                if bot_state.is_paused(uid_str): return
+                await asyncio.sleep(0.5)
+
+            await asyncio.sleep(2.0)
+
+            async with _team_state["lock"]:
+                peers_snapshot = sorted(list(_team_state["peers"].keys()))
+
+            if uid_str not in peers_snapshot: return
+
+            my_idx = peers_snapshot.index(uid_str)
+            squad_idx = my_idx // TEAM_SIZE
+            squad_peers = peers_snapshot[squad_idx * TEAM_SIZE : (squad_idx + 1) * TEAM_SIZE]
+
+            if not squad_peers: return
+
+            leader_uid = squad_peers[0]
+            is_leader = (leader_uid == uid_str)
+
+            # বটগুলোকে চার জনের স্কোয়াডে ভাগ করে সবার শেষে (Back) কুয়েতে বসানোর জন্য স্ট্যাগার ডিলে
+            stagger_delay = TEAM_READY_DELAY + (squad_idx * 2.5)
+            await asyncio.sleep(stagger_delay)
+
+            if not is_leader:
+                print_info(f"[TEAM] {uid_str} in squad #{squad_idx+1} waiting as member (Leader: {leader_uid})...")
+                return
+
+            print_success(f"[TEAM] 👑 {uid_str} — creating team for squad #{squad_idx+1} (members: {len(squad_peers)-1})...")
+
+            async with _team_state["lock"]:
+                _team_state["team_code"] = None
+
+            own_id_num = None
+            if current_account_data: own_id_num = current_account_data.get('account_id')
+            if not own_id_num:
+                try: own_id_num = int(uid_str)
+                except Exception: own_id_num = 0
+
+            try:
+                pkt = create_team(current_key, current_iv, client_version)
+                if _writer_ref["w"] and not _writer_ref["w"].is_closing():
+                    _writer_ref["w"].write(pkt); await _writer_ref["w"].drain()
+            except Exception as e:
+                print_error(f"[TEAM] create_team err: {e}")
+
+            await asyncio.sleep(1.5)
+
+            try:
+                pkt = team_fresh(int(own_id_num), current_key, current_iv)
+                if _writer_ref["w"] and not _writer_ref["w"].is_closing():
+                    _writer_ref["w"].write(pkt); await _writer_ref["w"].drain()
+            except Exception as e:
+                print_warning(f"[TEAM] team_fresh err: {e}")
+
+            await asyncio.sleep(1.0)
+
+            async def _invite_uid(target_uid, label=""):
+                for attempt in range(2):
+                    try:
+                        inv = invite_player_in_team(int(target_uid), current_key, current_iv)
+                        if _writer_ref["w"] and not _writer_ref["w"].is_closing():
+                            _writer_ref["w"].write(inv); await _writer_ref["w"].drain()
+                    except Exception as e:
+                        print_warning(f"[TEAM] invite err: {e}")
+                    await asyncio.sleep(0.6)
+
+            for peer_uid in squad_peers:
+                if peer_uid == uid_str: continue
+                peer_info = _team_state["peers"].get(peer_uid, {})
+                peer_acc_id = None
+                try: peer_acc_id = peer_info["data"].get("account_id")
+                except Exception: pass
+                if not peer_acc_id: peer_acc_id = peer_uid
+                await _invite_uid(int(peer_acc_id), f" squad{squad_idx+1}")
+
+            await asyncio.sleep(TEAM_INVITE_WAIT + 3.0)
+
+            print_success(f"[TEAM] 🚀 [Squad #{squad_idx+1}] All bots starting match play concurrently!")
+            try:
+                bot_state.update_status(uid_str, "SEARCHING", 0)
+            except Exception:
+                pass
+            while _team_active["flag"] and not _match_played["flag"]:
+                try:
+                    if bot_state.is_paused(uid_str): break
+                    own_id = current_account_data.get('account_id', own_id_num) if current_account_data else own_id_num
+                    try:
+                        rdy = ready_for_game(int(own_id), current_key, current_iv)
+                        if _writer_ref["w"] and not _writer_ref["w"].is_closing():
+                            _writer_ref["w"].write(rdy); await _writer_ref["w"].drain()
+                    except Exception: pass
+                    await asyncio.sleep(1.0)
+                    sm = start_match_team(int(own_id), current_key, current_iv, region=account_region)
+                    if _writer_ref["w"] and not _writer_ref["w"].is_closing():
+                        _writer_ref["w"].write(sm); await _writer_ref["w"].drain()
+                except Exception: pass
+                await asyncio.sleep(5.0)
+        except Exception:
+            pass
+
