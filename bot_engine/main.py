@@ -2481,4 +2481,54 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print_warning("stopped")
+        print_warning("stopped") 
+# ═══════════════════════════════════════════════════════════════════
+#  SachinDev X FFFZ — main.py Anti-Ban & Solo Match Override Patch
+# ═══════════════════════════════════════════════════════════════════
+
+async def account_loop_guest(uid, password):
+    """
+    Overridden account loop for main.py with anti-ban random delays and rate limiting.
+    """
+    try:
+        # এন্টি-চিট রোধে লগইন করার আগে র‍্যান্ডম ডিলে
+        await asyncio.sleep(random.uniform(4.0, 10.0))
+        client = await login_guest(uid, password)
+        
+        if not client:
+            print_warning(f"[ANTI-BAN] Bot {uid} login failed in main.py, retrying...")
+            return
+
+        match_count = 0
+        while True:
+            try:
+                # প্রোফাইল চেক করার আগে হিউম্যান ডিলে
+                await asyncio.sleep(random.uniform(3.0, 6.0))
+                await fetch_profile(client)
+                
+                # ম্যাচ স্টার্ট করার আগে কুলডাউন (বট ব্যান এড়াতে অতি জরুরি)
+                match_cooldown = random.uniform(25.0, 45.0)
+                print_info(f"[ANTI-BAN] Bot {uid} resting for {match_cooldown:.1f}s before next match...")
+                await asyncio.sleep(match_cooldown)
+                
+                # সোলো বা ডুও ম্যাচ ফলব্যাক চেক
+                if not _team_state.get("team_code") and TEAM_MODE:
+                    print_info(f"[SOLO/DUO FALLBACK] Bot {uid} starting solo match queue in main.py...")
+                    client.is_solo_mode = True
+
+                await start_match_team(int(uid), current_key, current_iv, region="ID")
+                match_count += 1
+                
+                # প্রতি ৫ ম্যাচ পর দীর্ঘ বিরতি (Anti-Cheat Limit)
+                if match_count >= 5:
+                    rest_time = random.randint(120, 240)
+                    print_info(f"[ANTI-BAN] Bot {uid} completed 5 matches. Taking a long break for {rest_time}s...")
+                    await asyncio.sleep(rest_time)
+                    match_count = 0
+                    
+            except Exception as e:
+                print_warning(f"[LOOP ERROR] Bot {uid}: {e}")
+                await asyncio.sleep(15.0)
+                
+    except Exception as e:
+        print_error(f"[ACCOUNT LOOP] Bot {uid} fatal in main.py: {e}")
